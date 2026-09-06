@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quét & Quản lý CCCD</title>
+
+<!-- Thư viện quét QR -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+<!-- Firebase (dùng bản compat cho dễ, không cần build tool) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="config.js"></script>
+
+<style>
+  :root{
+    --bg:#0f1115;
+    --panel:#171a21;
+    --panel-2:#1f232c;
+    --border:#2a2f3a;
+    --text:#e8eaed;
+    --muted:#9aa1ac;
+    --accent:#4f8cff;
+    --accent-2:#3a6fd6;
+    --good:#2ecc71;
+    --danger:#ff5d6c;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    min-height:100vh;
+  }
+  header{
+    padding:18px 20px 12px;
+    border-bottom:1px solid var(--border);
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+  }
+  header h1{
+    font-size:18px;
+    margin:0;
+    font-weight:600;
+  }
+  .status-dot{
+    width:8px;height:8px;border-radius:50%;
+    background:var(--muted);
+    display:inline-block;margin-right:6px;
+  }
+  .status-dot.online{background:var(--good);}
+  .status-dot.offline{background:var(--danger);}
+  .status-text{font-size:12px;color:var(--muted);}
+
+  .tabs{
+    display:flex;
+    gap:8px;
+    padding:12px 16px 0;
+  }
+  .tab-btn{
+    flex:1;
+    padding:12px;
+    background:var(--panel);
+    border:1px solid var(--border);
+    color:var(--muted);
+    border-radius:12px 12px 0 0;
+    font-size:15px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .tab-btn.active{
+    background:var(--panel-2);
+    color:var(--text);
+    border-color:var(--accent);
+    border-bottom-color:var(--panel-2);
+  }
+
+  main{
+    padding:0 16px 32px;
+  }
+  .panel{
+    background:var(--panel-2);
+    border:1px solid var(--border);
+    border-radius:0 0 var(--radius) var(--radius);
+    padding:18px;
+  }
+  .hidden{display:none !important;}
+
+  #reader{
+    width:100%;
+    border-radius:12px;
+    overflow:hidden;
+    border:1px solid var(--border);
+  }
+  .scan-hint{
+    color:var(--muted);
+    font-size:13px;
+    margin:12px 0 0;
+    text-align:center;
+  }
+
+  .last-scan{
+    margin-top:16px;
+    padding:14px;
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:12px;
+    display:none;
+  }
+  .last-scan.show{display:block;}
+  .last-scan h3{
+    margin:0 0 8px;
+    font-size:14px;
+    color:var(--good);
+  }
+  .field-row{
+    display:flex;
+    justify-content:space-between;
+    gap:8px;
+    padding:6px 0;
+    border-bottom:1px solid var(--border);
+    font-size:14px;
+  }
+  .field-row:last-child{border-bottom:none;}
+  .field-label{color:var(--muted); flex-shrink:0;}
+  .field-value{
+    text-align:right;
+    word-break:break-word;
+  }
+
+  .list-toolbar{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:14px;
+    gap:10px;
+  }
+  .list-toolbar input{
+    flex:1;
+    padding:10px 12px;
+    border-radius:10px;
+    border:1px solid var(--border);
+    background:var(--panel);
+    color:var(--text);
+    font-size:14px;
+  }
+  .count-badge{
+    font-size:12px;
+    color:var(--muted);
+    white-space:nowrap;
+  }
+
+  .card{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:14px;
+    margin-bottom:12px;
+  }
+  .card-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:10px;
+    margin-bottom:8px;
+  }
+  .card-name{
+    font-weight:600;
+    font-size:15px;
+  }
+  .card-time{
+    font-size:11px;
+    color:var(--muted);
+    white-space:nowrap;
+  }
+  .card-fields .field-row{font-size:13px;}
+  .card-actions{
+    display:flex;
+    gap:8px;
+    margin-top:10px;
+  }
+  button.btn{
+    border:none;
+    border-radius:9px;
+    padding:9px 14px;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .btn-primary{background:var(--accent); color:#fff;}
+  .btn-primary:hover{background:var(--accent-2);}
+  .btn-ghost{background:transparent; color:var(--muted); border:1px solid var(--border);}
+  .btn-danger{background:transparent; color:var(--danger); border:1px solid var(--border);}
+  .copy-mini{
+    background:transparent;
+    border:none;
+    color:var(--accent);
+    cursor:pointer;
+    font-size:12px;
+    padding:2px 6px;
+  }
+  .empty-state{
+    text-align:center;
+    color:var(--muted);
+    padding:40px 10px;
+    font-size:14px;
+  }
+  .toast{
+    position:fixed;
+    bottom:24px;
+    left:50%;
+    transform:translateX(-50%);
+    background:var(--good);
+    color:#04331b;
+    padding:10px 18px;
+    border-radius:20px;
+    font-size:13px;
+    font-weight:600;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .25s ease;
+    z-index:999;
+  }
+  .toast.show{opacity:1;}
+
+  .config-warning{
+    margin:16px;
+    padding:14px;
+    border:1px solid var(--danger);
+    border-radius:12px;
+    color:var(--danger);
+    font-size:13px;
+    background:rgba(255,93,108,0.08);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📇 Quét & Quản lý CCCD</h1>
+  <div>
+    <span class="status-dot" id="statusDot"></span>
+    <span class="status-text" id="statusText">Đang kết nối...</span>
+  </div>
+</header>
+
+<div id="configWarning" class="config-warning hidden">
+  ⚠️ Chưa cấu hình Firebase. Hãy điền thông tin dự án vào file <b>config.js</b> (xem README.md) rồi tải lại trang.
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" id="tabScanBtn" onclick="switchTab('scan')">📷 Quét mã</button>
+  <button class="tab-btn" id="tabListBtn" onclick="switchTab('list')">📋 Danh sách</button>
+</div>
+
+<main>
+  <!-- TAB QUÉT -->
+  <div class="panel" id="panelScan">
+    <div id="reader"></div>
+    <p class="scan-hint">Đưa camera vào mã QR ở mặt sau CCCD gắn chip. Giữ máy ổn định, đủ sáng.</p>
+
+    <div class="last-scan" id="lastScan">
+      <h3>✅ Vừa quét xong</h3>
+      <div id="lastScanFields"></div>
+    </div>
+  </div>
+
+  <!-- TAB DANH SÁCH -->
+  <div class="panel hidden" id="panelList">
+    <div class="list-toolbar">
+      <input type="text" id="searchInput" placeholder="Tìm theo tên hoặc số CCCD..." oninput="renderList()">
+      <span class="count-badge" id="countBadge">0 bản ghi</span>
+    </div>
+    <div id="listContainer"></div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ================== CẤU HÌNH FIRESTORE ==================
+let db = null;
+let firebaseReady = false;
+
+function initFirebase(){
+  try{
+    if(!firebaseConfig || firebaseConfig.apiKey.includes("DÁN_")){
+      document.getElementById('configWarning').classList.remove('hidden');
+      setStatus(false, "Chưa cấu hình");
+      return;
+    }
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    firebaseReady = true;
+    setStatus(true, "Đã kết nối");
+    listenToRecords();
+  }catch(e){
+    console.error(e);
+    setStatus(false, "Lỗi kết nối");
+  }
+}
+
+function setStatus(online, text){
+  document.getElementById('statusDot').className = 'status-dot ' + (online ? 'online' : 'offline');
+  document.getElementById('statusText').textContent = text;
+}
+
+// ================== TAB SWITCHING ==================
+function switchTab(tab){
+  const isScan = tab === 'scan';
+  document.getElementById('panelScan').classList.toggle('hidden', !isScan);
+  document.getElementById('panelList').classList.toggle('hidden', isScan);
+  document.getElementById('tabScanBtn').classList.toggle('active', isScan);
+  document.getElementById('tabListBtn').classList.toggle('active', !isScan);
+
+  if(isScan){
+    startScanner();
+  } else {
+    stopScanner();
+  }
+}
+
+// ================== QUÉT QR ==================
+let html5QrCode = null;
+let scanning = false;
+
+function startScanner(){
+  if(scanning) return;
+  html5QrCode = new Html5Qrcode("reader");
+  const config = { fps: 10, qrbox: { width: 260, height: 260 } };
+  html5QrCode.start(
+    { facingMode: "environment" },
+    config,
+    onScanSuccess,
+    () => {} // lỗi từng khung hình, bỏ qua
+  ).then(() => { scanning = true; })
+   .catch(err => {
+      console.error(err);
+      document.getElementById('reader').innerHTML =
+        '<p style="color:#ff5d6c;padding:20px;text-align:center;">Không mở được camera. Hãy cho phép quyền camera và dùng trình duyệt Safari/Chrome.</p>';
+   });
+}
+
+function stopScanner(){
+  if(html5QrCode && scanning){
+    html5QrCode.stop().then(()=>{ scanning = false; html5QrCode.clear(); }).catch(()=>{});
+  }
+}
+
+let lastRawScanned = "";
+
+function onScanSuccess(decodedText){
+  if(decodedText === lastRawScanned) return; // tránh lưu trùng liên tục
+  lastRawScanned = decodedText;
+  const record = parseCccdQr(decodedText);
+  saveRecord(record);
+  showLastScan(record);
+  showToast("Đã lưu: " + (record.hoTen || "bản ghi mới"));
+  // cho phép quét lại mã khác sau 2 giây
+  setTimeout(()=>{ lastRawScanned = ""; }, 2000);
+}
+
+// Định dạng chuẩn QR CCCD gắn chip:
+// soCCCD|soCMNDCu|hoTen|ngaySinh|gioiTinh|diaChi|ngayCap
+function parseCccdQr(raw){
+  const parts = raw.split('|');
+  return {
+    soCCCD: parts[0] || "",
+    soCMNDCu: parts[1] || "",
+    hoTen: parts[2] || "",
+    ngaySinh: parts[3] || "",
+    gioiTinh: parts[4] || "",
+    diaChi: parts[5] || "",
+    ngayCap: parts[6] || "",
+    raw: raw,
+    createdAt: Date.now()
+  };
+}
+
+function showLastScan(r){
+  const box = document.getElementById('lastScan');
+  const fieldsHtml = fieldRowsHtml(r);
+  document.getElementById('lastScanFields').innerHTML = fieldsHtml;
+  box.classList.add('show');
+}
+
+function fieldRowsHtml(r){
+  const map = [
+    ["Số CCCD", r.soCCCD],
+    ["Số CMND cũ", r.soCMNDCu],
+    ["Họ tên", r.hoTen],
+    ["Ngày sinh", r.ngaySinh],
+    ["Giới tính", r.gioiTinh],
+    ["Địa chỉ", r.diaChi],
+    ["Ngày cấp", r.ngayCap],
+  ];
+  return map
+    .filter(([label, val]) => val)
+    .map(([label, val]) => `
+      <div class="field-row">
+        <span class="field-label">${label}</span>
+        <span class="field-value">${escapeHtml(val)}
+          <button class="copy-mini" onclick="copyText('${escapeAttr(val)}', this)">Copy</button>
+        </span>
+      </div>`).join('');
+}
+
+// ================== LƯU / ĐỌC DỮ LIỆU (FIRESTORE) ==================
+function saveRecord(record){
+  if(!firebaseReady){
+    showToast("Chưa kết nối Firebase, không lưu được!");
+    return;
+  }
+  db.collection("cccd_scans").add(record).catch(err=>{
+    console.error(err);
+    showToast("Lỗi khi lưu dữ liệu");
+  });
+}
+
+let allRecords = [];
+
+function listenToRecords(){
+  db.collection("cccd_scans")
+    .orderBy("createdAt", "desc")
+    .onSnapshot(snapshot => {
+      allRecords = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      renderList();
+    }, err => {
+      console.error(err);
+      setStatus(false, "Lỗi đồng bộ");
+    });
+}
+
+function deleteRecord(id){
+  if(!confirm("Xóa bản ghi này khỏi danh sách?")) return;
+  db.collection("cccd_scans").doc(id).delete();
+}
+
+// ================== HIỂN THỊ DANH SÁCH ==================
+function renderList(){
+  const search = (document.getElementById('searchInput').value || "").toLowerCase().trim();
+  const filtered = allRecords.filter(r =>
+    !search ||
+    (r.hoTen || "").toLowerCase().includes(search) ||
+    (r.soCCCD || "").toLowerCase().includes(search)
+  );
+
+  document.getElementById('countBadge').textContent = `${filtered.length} bản ghi`;
+  const container = document.getElementById('listContainer');
+
+  if(filtered.length === 0){
+    container.innerHTML = `<div class="empty-state">Chưa có dữ liệu nào. Hãy dùng tab "Quét mã" trên điện thoại để bắt đầu.</div>`;
+    return;
+  }
+
+  container.innerHTML = filtered.map(r => `
+    <div class="card">
+      <div class="card-top">
+        <span class="card-name">${escapeHtml(r.hoTen || "(Không rõ tên)")}</span>
+        <span class="card-time">${formatTime(r.createdAt)}</span>
+      </div>
+      <div class="card-fields">${fieldRowsHtml(r)}</div>
+      <div class="card-actions">
+        <button class="btn btn-primary" onclick='copyFullRecord(${JSON.stringify(r.id)})'>📋 Copy tất cả</button>
+        <button class="btn btn-danger" onclick="deleteRecord('${r.id}')">🗑 Xóa</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function copyFullRecord(id){
+  const r = allRecords.find(x => x.id === id);
+  if(!r) return;
+  const text = [
+    r.soCCCD && `Số CCCD: ${r.soCCCD}`,
+    r.soCMNDCu && `Số CMND cũ: ${r.soCMNDCu}`,
+    r.hoTen && `Họ tên: ${r.hoTen}`,
+    r.ngaySinh && `Ngày sinh: ${r.ngaySinh}`,
+    r.gioiTinh && `Giới tính: ${r.gioiTinh}`,
+    r.diaChi && `Địa chỉ: ${r.diaChi}`,
+    r.ngayCap && `Ngày cấp: ${r.ngayCap}`,
+  ].filter(Boolean).join('\n');
+  copyText(text);
+}
+
+// ================== TIỆN ÍCH ==================
+function copyText(text, btnEl){
+  navigator.clipboard.writeText(text).then(()=>{
+    showToast("Đã copy vào clipboard");
+    if(btnEl){
+      const old = btnEl.textContent;
+      btnEl.textContent = "✓";
+      setTimeout(()=>{ btnEl.textContent = old; }, 1000);
+    }
+  }).catch(()=>{
+    showToast("Không copy được, hãy thử lại");
+  });
+}
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 1800);
+}
+
+function formatTime(ts){
+  if(!ts) return "";
+  const d = new Date(ts);
+  return d.toLocaleString('vi-VN', { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit' });
+}
+
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, m => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[m]));
+}
+function escapeAttr(str){
+  return String(str).replace(/'/g, "\\'");
+}
+
+// ================== KHỞI ĐỘNG ==================
+window.addEventListener('load', () => {
+  initFirebase();
+  startScanner(); // tab mặc định là "Quét mã"
+});
+</script>
+
+</body>
+</html>
