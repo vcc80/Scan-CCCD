@@ -262,7 +262,9 @@
   <!-- TAB QUÉT -->
   <div class="panel" id="panelScan">
     <div id="reader"></div>
+    <video id="nativeVideo" playsinline muted style="width:100%;border-radius:12px;display:none;"></video>
     <p class="scan-hint">Đưa camera vào mã QR ở mặt sau CCCD gắn chip. Giữ máy ổn định, đủ sáng.</p>
+    <p class="scan-hint" id="engineNote" style="opacity:0.6;font-size:11px;"></p>
 
     <button class="btn btn-primary" style="width:100%;margin-top:14px;padding:14px;font-size:15px;" onclick="document.getElementById('fileInput').click()">
       📸 Quét trực tiếp khó? Chụp ảnh để quét thay thế
@@ -332,11 +334,82 @@ function switchTab(tab){
 }
 
 // ================== QUÉT QR ==================
+// Ưu tiên dùng BarcodeDetector - API giải mã GỐC của hệ điều hành (giống cách các app
+// native như Zalo giải mã), cho kết quả tốt hơn nhiều so với thư viện JS thuần.
+// Nếu trình duyệt không hỗ trợ, tự động dùng lại thư viện html5-qrcode làm dự phòng.
+let nativeSupported = false;
+try{ nativeSupported = 'BarcodeDetector' in window; }catch(e){ nativeSupported = false; }
+
 let html5QrCode = null;
 let scanning = false;
+let nativeStream = null;
+let nativeDetector = null;
+let nativeLoopId = null;
 
 function startScanner(){
   if(scanning) return;
+  document.getElementById('engineNote').textContent = nativeSupported
+    ? "Đang dùng bộ giải mã gốc của trình duyệt"
+    : "Trình duyệt này chưa hỗ trợ bộ giải mã gốc — đang dùng thư viện dự phòng (độ chính xác thấp hơn). Nên cập nhật iOS/trình duyệt lên bản mới nhất.";
+  if(nativeSupported){
+    startNativeScanner();
+  } else {
+    startLegacyScanner();
+  }
+}
+
+function stopScanner(){
+  if(nativeSupported){
+    stopNativeScanner();
+  } else {
+    stopLegacyScanner();
+  }
+}
+
+// ---- Phương án 1: BarcodeDetector gốc (ưu tiên) ----
+async function startNativeScanner(){
+  document.getElementById('reader').style.display = 'none';
+  const video = document.getElementById('nativeVideo');
+  video.style.display = 'block';
+  try{
+    nativeStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
+    });
+    video.srcObject = nativeStream;
+    await video.play();
+    nativeDetector = new BarcodeDetector({ formats: ["qr_code"] });
+    scanning = true;
+    nativeLoopId = setInterval(async () => {
+      if(!scanning || video.readyState < 2) return;
+      try{
+        const barcodes = await nativeDetector.detect(video);
+        if(barcodes && barcodes.length > 0){
+          onScanSuccess(barcodes[0].rawValue);
+        }
+      }catch(e){ /* bỏ qua, thử lại ở khung hình tiếp theo */ }
+    }, 350);
+  }catch(err){
+    console.error(err);
+    video.style.display = 'none';
+    document.getElementById('reader').style.display = 'block';
+    document.getElementById('reader').innerHTML =
+      '<p style="color:#ff5d6c;padding:20px;text-align:center;">Không mở được camera. Hãy cho phép quyền camera trong Cài đặt Safari.</p>';
+  }
+}
+
+function stopNativeScanner(){
+  scanning = false;
+  if(nativeLoopId){ clearInterval(nativeLoopId); nativeLoopId = null; }
+  if(nativeStream){ nativeStream.getTracks().forEach(t => t.stop()); nativeStream = null; }
+}
+
+// ---- Phương án 2: html5-qrcode (dự phòng cho trình duyệt cũ) ----
+function startLegacyScanner(){
   html5QrCode = new Html5Qrcode("reader");
   const config = {
     fps: 5,
@@ -344,15 +417,14 @@ function startScanner(){
     videoConstraints: {
       facingMode: "environment",
       width: { ideal: 1920 },
-      height: { ideal: 1080 },
-      advanced: [{ focusMode: "continuous" }]
+      height: { ideal: 1080 }
     }
   };
   html5QrCode.start(
     { facingMode: "environment" },
     config,
     onScanSuccess,
-    () => {} // lỗi từng khung hình, bỏ qua
+    () => {}
   ).then(() => { scanning = true; })
    .catch(err => {
       console.error(err);
@@ -361,40 +433,47 @@ function startScanner(){
    });
 }
 
-function stopScanner(){
+function stopLegacyScanner(){
   if(html5QrCode && scanning){
     html5QrCode.stop().then(()=>{ scanning = false; html5QrCode.clear(); }).catch(()=>{});
   }
 }
 
-function handleFileScan(event){
+// ---- Quét từ ảnh chụp (dự phòng khi quét trực tiếp khó) ----
+async function handleFileScan(event){
   const file = event.target.files[0];
   if(!file) return;
   const statusEl = document.getElementById('fileScanStatus');
   statusEl.textContent = "Đang giải mã ảnh...";
 
-  // html5-qrcode cần 1 div id để khởi tạo, dù scanFile không render gì lên đó — tạo div ẩn tạm
-  const hiddenDiv = document.createElement('div');
-  hiddenDiv.id = "reader-file-temp-" + Date.now();
-  hiddenDiv.style.display = 'none';
-  document.body.appendChild(hiddenDiv);
-
-  const scannerForFile = new Html5Qrcode(hiddenDiv.id);
-  scannerForFile.scanFile(file, true)
-    .then(decodedText => {
+  try{
+    if(nativeSupported){
+      const bitmap = await createImageBitmap(file);
+      const detector = new BarcodeDetector({ formats: ["qr_code"] });
+      const results = await detector.detect(bitmap);
+      if(results && results.length > 0){
+        statusEl.textContent = "";
+        onScanSuccess(results[0].rawValue);
+      } else {
+        throw new Error("Không tìm thấy mã QR trong ảnh");
+      }
+    } else {
+      const hiddenDiv = document.createElement('div');
+      hiddenDiv.id = "reader-file-temp-" + Date.now();
+      hiddenDiv.style.display = 'none';
+      document.body.appendChild(hiddenDiv);
+      const scannerForFile = new Html5Qrcode(hiddenDiv.id);
+      const decodedText = await scannerForFile.scanFile(file, true);
       statusEl.textContent = "";
       onScanSuccess(decodedText);
       scannerForFile.clear();
       hiddenDiv.remove();
-      event.target.value = "";
-    })
-    .catch(err => {
-      console.error(err);
-      statusEl.textContent = "Không đọc được mã trong ảnh. Hãy chụp lại rõ nét hơn, đủ sáng, và đảm bảo mã QR nằm trọn trong ảnh.";
-      scannerForFile.clear();
-      hiddenDiv.remove();
-      event.target.value = "";
-    });
+    }
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = "Không đọc được mã trong ảnh. Hãy chụp lại rõ nét hơn, đủ sáng, và đảm bảo mã QR nằm trọn trong ảnh.";
+  }
+  event.target.value = "";
 }
 
 let lastRawScanned = "";
