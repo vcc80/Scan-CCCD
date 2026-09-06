@@ -264,6 +264,12 @@
     <div id="reader"></div>
     <p class="scan-hint">Đưa camera vào mã QR ở mặt sau CCCD gắn chip. Giữ máy ổn định, đủ sáng.</p>
 
+    <button class="btn btn-primary" style="width:100%;margin-top:14px;padding:14px;font-size:15px;" onclick="document.getElementById('fileInput').click()">
+      📸 Quét trực tiếp khó? Chụp ảnh để quét thay thế
+    </button>
+    <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none" onchange="handleFileScan(event)">
+    <p class="scan-hint" id="fileScanStatus"></p>
+
     <div class="last-scan" id="lastScan">
       <h3>✅ Vừa quét xong</h3>
       <div id="lastScanFields"></div>
@@ -332,7 +338,16 @@ let scanning = false;
 function startScanner(){
   if(scanning) return;
   html5QrCode = new Html5Qrcode("reader");
-  const config = { fps: 10, qrbox: { width: 260, height: 260 } };
+  const config = {
+    fps: 5,
+    qrbox: { width: 300, height: 300 },
+    videoConstraints: {
+      facingMode: "environment",
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      advanced: [{ focusMode: "continuous" }]
+    }
+  };
   html5QrCode.start(
     { facingMode: "environment" },
     config,
@@ -350,6 +365,36 @@ function stopScanner(){
   if(html5QrCode && scanning){
     html5QrCode.stop().then(()=>{ scanning = false; html5QrCode.clear(); }).catch(()=>{});
   }
+}
+
+function handleFileScan(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const statusEl = document.getElementById('fileScanStatus');
+  statusEl.textContent = "Đang giải mã ảnh...";
+
+  // html5-qrcode cần 1 div id để khởi tạo, dù scanFile không render gì lên đó — tạo div ẩn tạm
+  const hiddenDiv = document.createElement('div');
+  hiddenDiv.id = "reader-file-temp-" + Date.now();
+  hiddenDiv.style.display = 'none';
+  document.body.appendChild(hiddenDiv);
+
+  const scannerForFile = new Html5Qrcode(hiddenDiv.id);
+  scannerForFile.scanFile(file, true)
+    .then(decodedText => {
+      statusEl.textContent = "";
+      onScanSuccess(decodedText);
+      scannerForFile.clear();
+      hiddenDiv.remove();
+      event.target.value = "";
+    })
+    .catch(err => {
+      console.error(err);
+      statusEl.textContent = "Không đọc được mã trong ảnh. Hãy chụp lại rõ nét hơn, đủ sáng, và đảm bảo mã QR nằm trọn trong ảnh.";
+      scannerForFile.clear();
+      hiddenDiv.remove();
+      event.target.value = "";
+    });
 }
 
 let lastRawScanned = "";
